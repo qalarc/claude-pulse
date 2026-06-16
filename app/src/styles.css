@@ -1,0 +1,326 @@
+:root {
+  --bg: #0d0f14;
+  --panel: #151820;
+  --card: #161a23;
+  --text: #e6e9ef;
+  --muted: #7a8294;
+  --accent: #d97757; /* Anthropic clay */
+  --in: #5b9bd5;
+  --out: #c08fe0;
+  --req: #4caf82;
+  --peak: #f5c451;
+  --rl: #e0564a;
+  --border: #232733;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font:
+    13px/1.4 ui-monospace,
+    "JetBrains Mono",
+    "SF Mono",
+    Menlo,
+    monospace;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── topbar ───────────────────────────────────────────── */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.brand {
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+.brand .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  margin-right: 6px;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.rangewrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.rangewrap select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+}
+#widgetBtn {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+#widgetBtn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* ── dashboard (single scrolling page) ─────────────────── */
+#dash {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.card h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 12px;
+  letter-spacing: 0.3px;
+}
+.card h2 .sub {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.row.top {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 14px;
+}
+.gaugecard {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+#gauge {
+  max-width: 100%;
+  height: auto;
+}
+
+/* stat tiles */
+.statgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.metric {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+.metric .label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.metric .val {
+  font-size: 26px;
+  font-weight: 600;
+}
+.metric.warn .val {
+  color: var(--rl);
+}
+
+/* ── rolling windows (5h / 7d) ─────────────────────────── */
+.winrow {
+  margin-bottom: 14px;
+}
+.winrow:last-child {
+  margin-bottom: 0;
+}
+.winhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.wlabel {
+  font-size: 13px;
+}
+.wpct {
+  font-size: 20px;
+  font-weight: 600;
+}
+.wbar {
+  height: 14px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.wfill {
+  height: 100%;
+  width: 0%;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--req), var(--peak) 70%, var(--rl));
+  transition:
+    width 0.6s ease,
+    background 0.4s ease;
+}
+.wnote {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 5px;
+}
+
+/* ── graph ─────────────────────────────────────────────── */
+.graphcard canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.legend .sw {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.sw.trend {
+  background: var(--accent);
+}
+.sw.in {
+  background: var(--in);
+}
+.sw.out {
+  background: var(--out);
+}
+.sw.req {
+  background: var(--req);
+}
+.sw.peak {
+  background: var(--peak);
+}
+.sw.rl {
+  background: var(--rl);
+}
+
+/* ── calendar ──────────────────────────────────────────── */
+#calendar {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.day {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.day.rl {
+  border-color: var(--rl);
+}
+.day .d {
+  color: var(--muted);
+  font-size: 11px;
+}
+.day .tot {
+  font-size: 18px;
+  font-weight: 600;
+}
+.day .sub {
+  color: var(--muted);
+  font-size: 10px;
+}
+.day .rlbadge {
+  color: var(--rl);
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+/* ── footer ────────────────────────────────────────────── */
+#status {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── widget mode (compact, gauge only) ─────────────────── */
+body.widget #topbar .rangewrap,
+body.widget #status,
+body.widget .windows,
+body.widget .graphcard,
+body.widget .calcard,
+body.widget .statgrid {
+  display: none;
+}
+body.widget #dash {
+  padding: 6px;
+}
+body.widget .row.top {
+  grid-template-columns: 1fr;
+}
+body.widget #gauge {
+  height: 170px;
+}

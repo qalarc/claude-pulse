@@ -1,0 +1,51 @@
+{
+  "$comment": "Machine-readable project registry for the qalarc.com projects page. A future site renders this. Add new projects to the array.",
+  "updated": "2026-06-16",
+  "projects": [
+    {
+      "slug": "claude-pulse",
+      "name": "Claude Pulse",
+      "tagline": "Open-source Claude API usage monitor with an accelerometer-style live gauge",
+      "status": "active",
+      "featured": true,
+      "openSource": true,
+      "license": "MIT",
+      "tech": ["Tauri", "Rust", "Bun", "Canvas"],
+      "repoPath": "~/projects/claude-pulse",
+      "links": {
+        "github": "https://github.com/fivelidz/claude-pulse",
+        "site": "https://qalarc.com/projects/claude-pulse"
+      },
+      "summary": "A local-first desktop app that visualizes Anthropic Claude API usage in real time: an accelerometer gauge for tokens-per-minute, a per-minute timeline with peak and rate-limit (429) markers, and a daily calendar. Works with any Claude tool (Claude Code, qalcode2, scripts) by capturing usage at the network layer via a tiny local proxy that logs metadata only — never prompts, never credentials. Helps users discover their undocumented per-minute rate limit by observing their own traffic.",
+      "highlights": [
+        "Accelerometer-style live gauge (TPM needle, green/amber/red zones, peak marker)",
+        "Per-minute timeline with peak + rate-limit markers",
+        "Calendar of daily usage / peaks / throttles",
+        "Always-on-top compact widget mode for a second monitor",
+        "Captures ALL Claude tools, not just one app",
+        "Local-first: no cloud, no account, no credential handling",
+        "Reverse-engineered Anthropic's undocumented OAuth rate-limit headers (documented in-repo)"
+      ],
+      "privacy": "Metadata only (token counts, rate-limit headers, status, timing). Never logs prompt/completion text or auth tokens. Credentials never leave the user's machine.",
+      "tags": [
+        "claude",
+        "anthropic",
+        "rate-limits",
+        "observability",
+        "developer-tools",
+        "tauri"
+      ]
+    },
+    {
+      "slug": "claude-ratelimit-monitor",
+      "name": "Claude Rate-Limit Monitor (research)",
+      "tagline": "Documentation + method for by-minute Claude rate-limit monitoring",
+      "status": "research",
+      "featured": false,
+      "openSource": true,
+      "repoPath": "~/projects/qalarc.com/projects/claude-ratelimit-monitor",
+      "summary": "The research and method notes behind Claude Pulse: the three limit layers (per-minute / 5h / 7d), the undocumented OAuth header set, and the observe-don't-brute-force methodology. Superseded as a product by claude-pulse; retained as reference.",
+      "tags": ["claude", "rate-limits", "research"]
+    }
+  ]
+}

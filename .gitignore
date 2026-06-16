@@ -1,0 +1,20 @@
+# Rust / Tauri
+app/src-tauri/target/
+app/src-tauri/gen/
+app/src-tauri/Cargo.lock
+
+# Node
+node_modules/
+*/node_modules/
+bun.lockb
+dist/
+
+# OS
+.DS_Store
+
+# tooling / agent caches
+.opencode/
+
+# local data (never commit usage logs — they're personal)
+usage.jsonl
+*.jsonl

@@ -1,0 +1,15 @@
+{
+  "name": "claude-pulse-collector",
+  "version": "0.1.0",
+  "description": "Transparent local proxy that logs Anthropic API usage metadata for claude-pulse",
+  "type": "module",
+  "bin": {
+    "claude-pulse-collector": "./proxy.ts"
+  },
+  "scripts": {
+    "start": "bun run proxy.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

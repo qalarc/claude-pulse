@@ -1,0 +1,14 @@
+{
+  "name": "claude-pulse-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Pulse desktop app (Tauri)",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "preview": "bunx serve src"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

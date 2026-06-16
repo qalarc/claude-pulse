@@ -1,0 +1,518 @@
+// Claude Pulse — frontend. Vanilla JS + canvas, no framework.
+// Single-page dashboard. Pulls aggregated data from the backend (Tauri
+// commands, or the collector --web JSON API) and renders, all at once:
+//   - an accelerometer-style live gauge (tokens/min needle)
+//   - key stat tiles
+//   - 5-hour and 7-day rolling rate-limit window utilization bars
+//   - a per-minute "usage over time" graph with peak + rate-limit markers
+//   - a calendar of daily usage
+//
+// Falls back to a demo data generator when neither backend is present (so the
+// frontend can be developed in a plain browser).
+
+const invoke = window.__TAURI__?.core?.invoke;
+const tauriWindow = window.__TAURI__?.window;
+
+// When served by the collector's `--web` mode, a JSON API is available at
+// /api/snapshot and /api/days. We probe once; if it answers, use it. Otherwise
+// fall back to demo data (plain browser dev with no backend at all).
+let webApi = null; // null = unknown, true = available, false = absent
+async function probeWebApi() {
+  if (invoke) return false; // Tauri takes priority
+  if (webApi !== null) return webApi;
+  try {
+    const r = await fetch("/api/health", { cache: "no-store" });
+    webApi = r.ok;
+  } catch {
+    webApi = false;
+  }
+  return webApi;
+}
+
+// ── data access ────────────────────────────────────────────────────────────
+async function getSnapshot(windowMinutes) {
+  if (invoke) return invoke("snapshot", { windowMinutes });
+  if (await probeWebApi()) {
+    try {
+      const r = await fetch(`/api/snapshot?minutes=${windowMinutes}`, {
+        cache: "no-store",
+      });
+      if (r.ok) return await r.json();
+    } catch {}
+  }
+  return demoSnapshot(windowMinutes);
+}
+async function getDays(days) {
+  if (invoke) return invoke("day_summaries", { days });
+  if (await probeWebApi()) {
+    try {
+      const r = await fetch(`/api/days?days=${days}`, { cache: "no-store" });
+      if (r.ok) return await r.json();
+    } catch {}
+  }
+  return demoDays(days);
+}
+
+// ── state ────────────────────────────────────────────────────────────────
+let snap = null;
+let days = [];
+let needle = 0; // smoothed gauge needle
+let gaugeMax = 20000; // auto-scaling gauge ceiling
+let rangeMinutes = 60; // graph window
+
+// ── gauge (accelerometer) ──────────────────────────────────────────────────
+const gauge = document.getElementById("gauge");
+const gctx = gauge.getContext("2d");
+
+function drawGauge(tpm, peakTpm, rateLimited) {
+  const w = gauge.width,
+    h = gauge.height;
+  const cx = w / 2,
+    cy = h * 0.82,
+    r = Math.min(w, h) * 0.62;
+  gctx.clearRect(0, 0, w, h);
+
+  const target = Math.max(peakTpm * 1.15, tpm * 1.15, 5000);
+  gaugeMax += (target - gaugeMax) * 0.05;
+
+  const start = Math.PI * 0.92,
+    end = Math.PI * 2.08;
+  const sweep = end - start;
+
+  const zones = [
+    [0.0, 0.6, "#4caf82"],
+    [0.6, 0.85, "#f5c451"],
+    [0.85, 1.0, "#e0564a"],
+  ];
+  gctx.lineWidth = 18;
+  gctx.lineCap = "butt";
+  for (const [a, b, col] of zones) {
+    gctx.beginPath();
+    gctx.strokeStyle = col;
+    gctx.arc(cx, cy, r, start + sweep * a, start + sweep * b);
+    gctx.stroke();
+  }
+
+  gctx.strokeStyle = "#3a4150";
+  gctx.lineWidth = 2;
+  for (let i = 0; i <= 10; i++) {
+    const ang = start + (sweep * i) / 10;
+    const r1 = r - 26,
+      r2 = r - 14;
+    gctx.beginPath();
+    gctx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+    gctx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
+    gctx.stroke();
+  }
+
+  if (peakTpm > 0) {
+    const pa = start + sweep * Math.min(1, peakTpm / gaugeMax);
+    gctx.strokeStyle = "#f5c451";
+    gctx.lineWidth = 3;
+    gctx.beginPath();
+    gctx.moveTo(cx + Math.cos(pa) * (r - 30), cy + Math.sin(pa) * (r - 30));
+    gctx.lineTo(cx + Math.cos(pa) * (r + 6), cy + Math.sin(pa) * (r + 6));
+    gctx.stroke();
+  }
+
+  needle += (tpm - needle) * 0.18;
+  const na = start + sweep * Math.min(1, needle / gaugeMax);
+  gctx.strokeStyle = rateLimited ? "#e0564a" : "#d97757";
+  gctx.lineWidth = 4;
+  gctx.lineCap = "round";
+  gctx.beginPath();
+  gctx.moveTo(cx, cy);
+  gctx.lineTo(cx + Math.cos(na) * (r - 8), cy + Math.sin(na) * (r - 8));
+  gctx.stroke();
+  gctx.fillStyle = rateLimited ? "#e0564a" : "#d97757";
+  gctx.beginPath();
+  gctx.arc(cx, cy, 8, 0, Math.PI * 2);
+  gctx.fill();
+
+  gctx.fillStyle = "#e6e9ef";
+  gctx.textAlign = "center";
+  gctx.font = "600 30px ui-monospace, monospace";
+  gctx.fillText(fmt(Math.round(needle)), cx, cy - r * 0.42);
+  gctx.fillStyle = "#7a8294";
+  gctx.font = "12px ui-monospace, monospace";
+  gctx.fillText("tokens / min", cx, cy - r * 0.42 + 20);
+
+  if (rateLimited) {
+    gctx.fillStyle = "#e0564a";
+    gctx.font = "600 14px ui-monospace, monospace";
+    gctx.fillText("⛔ RATE LIMITED", cx, cy + 24);
+  }
+}
+
+// ── usage-over-time graph ───────────────────────────────────────────────────
+const timeline = document.getElementById("timeline");
+const tctx = timeline.getContext("2d");
+
+function drawTimeline(s) {
+  const w = timeline.width,
+    h = timeline.height;
+  tctx.clearRect(0, 0, w, h);
+  const pad = { l: 56, r: 14, t: 18, b: 28 };
+  const plotW = w - pad.l - pad.r,
+    plotH = h - pad.t - pad.b;
+  const mins = s.minutes || [];
+  if (mins.length === 0) {
+    tctx.fillStyle = "#7a8294";
+    tctx.textAlign = "center";
+    tctx.font = "13px ui-monospace, monospace";
+    tctx.fillText(
+      "No data yet — route a Claude tool through the collector proxy.",
+      w / 2,
+      h / 2,
+    );
+    return;
+  }
+  const total = (m) => m.input + m.output;
+  const maxTok = Math.max(...mins.map(total), 1);
+  const maxReq = Math.max(...mins.map((m) => m.requests), 1);
+  const n = mins.length;
+  const bw = plotW / n;
+  const xOfMin = (i) => pad.l + i * bw;
+  const xMid = (i) => pad.l + i * bw + bw / 2;
+  const yOfTok = (v) => pad.t + plotH - (v / maxTok) * plotH;
+
+  // y grid + token axis labels
+  tctx.strokeStyle = "#232733";
+  tctx.fillStyle = "#7a8294";
+  tctx.textAlign = "right";
+  tctx.font = "10px ui-monospace, monospace";
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + (plotH * i) / 4;
+    tctx.beginPath();
+    tctx.moveTo(pad.l, y);
+    tctx.lineTo(w - pad.r, y);
+    tctx.stroke();
+    tctx.fillText(fmt(Math.round((maxTok * (4 - i)) / 4)), pad.l - 6, y + 3);
+  }
+  // y-axis title
+  tctx.save();
+  tctx.translate(13, pad.t + plotH / 2);
+  tctx.rotate(-Math.PI / 2);
+  tctx.textAlign = "center";
+  tctx.fillStyle = "#9aa3b5";
+  tctx.font = "10px ui-monospace, monospace";
+  tctx.fillText("tokens / min", 0, 0);
+  tctx.restore();
+
+  // x-axis time labels (HH:MM)
+  tctx.textAlign = "center";
+  tctx.fillStyle = "#7a8294";
+  tctx.font = "10px ui-monospace, monospace";
+  const ticks = Math.min(6, n);
+  for (let t = 0; t < ticks; t++) {
+    const i = Math.round((t * (n - 1)) / Math.max(1, ticks - 1));
+    const d = new Date(mins[i].minute);
+    const label =
+      String(d.getHours()).padStart(2, "0") +
+      ":" +
+      String(d.getMinutes()).padStart(2, "0");
+    tctx.fillText(label, xMid(i), pad.t + plotH + 18);
+  }
+
+  // stacked input/output bars
+  mins.forEach((m, i) => {
+    const x = xOfMin(i);
+    const inH = (m.input / maxTok) * plotH;
+    const outH = (m.output / maxTok) * plotH;
+    tctx.fillStyle = "#5b9bd5";
+    tctx.fillRect(x + 1, pad.t + plotH - inH, Math.max(1, bw - 2), inH);
+    tctx.fillStyle = "#c08fe0";
+    tctx.fillRect(x + 1, pad.t + plotH - inH - outH, Math.max(1, bw - 2), outH);
+  });
+
+  // total tokens/min trend: filled area + line
+  tctx.beginPath();
+  tctx.moveTo(xMid(0), pad.t + plotH);
+  mins.forEach((m, i) => tctx.lineTo(xMid(i), yOfTok(total(m))));
+  tctx.lineTo(xMid(n - 1), pad.t + plotH);
+  tctx.closePath();
+  const grad = tctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
+  grad.addColorStop(0, "rgba(217,119,87,0.28)");
+  grad.addColorStop(1, "rgba(217,119,87,0.02)");
+  tctx.fillStyle = grad;
+  tctx.fill();
+
+  tctx.strokeStyle = "#d97757";
+  tctx.lineWidth = 2;
+  tctx.lineJoin = "round";
+  tctx.beginPath();
+  mins.forEach((m, i) => {
+    const x = xMid(i),
+      y = yOfTok(total(m));
+    i === 0 ? tctx.moveTo(x, y) : tctx.lineTo(x, y);
+  });
+  tctx.stroke();
+
+  // requests line (secondary, normalized to its own max)
+  tctx.strokeStyle = "#4caf82";
+  tctx.lineWidth = 1.5;
+  tctx.setLineDash([3, 3]);
+  tctx.beginPath();
+  mins.forEach((m, i) => {
+    const x = xMid(i);
+    const y = pad.t + plotH - (m.requests / maxReq) * plotH;
+    i === 0 ? tctx.moveTo(x, y) : tctx.lineTo(x, y);
+  });
+  tctx.stroke();
+  tctx.setLineDash([]);
+
+  // rate-limit (429) markers — vertical red bands + dots at the top
+  mins.forEach((m, i) => {
+    if (m.rate_limited > 0) {
+      const x = xOfMin(i);
+      tctx.fillStyle = "rgba(224,86,74,0.18)";
+      tctx.fillRect(x, pad.t, Math.max(2, bw), plotH);
+      tctx.fillStyle = "#e0564a";
+      tctx.fillRect(x, pad.t, Math.max(2, bw), 4);
+      tctx.beginPath();
+      tctx.arc(x + bw / 2, pad.t + 9, 3.5, 0, Math.PI * 2);
+      tctx.fill();
+    }
+  });
+
+  // peak marker
+  if (s.peak_minute) {
+    const idx = mins.findIndex((m) => m.minute === s.peak_minute);
+    if (idx >= 0) {
+      const x = xMid(idx);
+      tctx.strokeStyle = "#f5c451";
+      tctx.setLineDash([4, 3]);
+      tctx.lineWidth = 1;
+      tctx.beginPath();
+      tctx.moveTo(x, pad.t);
+      tctx.lineTo(x, pad.t + plotH);
+      tctx.stroke();
+      tctx.setLineDash([]);
+    }
+  }
+}
+
+// ── 5h / 7d rolling windows ─────────────────────────────────────────────────
+function setWindow(prefix, frac) {
+  const pctEl = document.getElementById(prefix + "-pct");
+  const fillEl = document.getElementById(prefix + "-fill");
+  if (frac == null || Number.isNaN(frac)) {
+    pctEl.textContent = "–";
+    fillEl.style.width = "0%";
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+  pctEl.textContent = pct + "%";
+  fillEl.style.width = pct + "%";
+  pctEl.style.color =
+    pct >= 85 ? "var(--rl)" : pct >= 60 ? "var(--peak)" : "var(--text)";
+}
+
+// ── calendar ────────────────────────────────────────────────────────────────
+function drawCalendar(list) {
+  const el = document.getElementById("calendar");
+  el.innerHTML = "";
+  if (!list || list.length === 0) {
+    el.innerHTML =
+      '<div style="color:#7a8294;grid-column:1/-1">No daily data yet.</div>';
+    return;
+  }
+  for (const d of list) {
+    const div = document.createElement("div");
+    div.className = "day" + (d.rate_limited > 0 ? " rl" : "");
+    div.innerHTML = `
+      <span class="d">${d.day}</span>
+      <span class="tot">${fmt(Math.round(d.input + d.output))}</span>
+      <span class="sub">${fmt(Math.round(d.input))} in · ${fmt(Math.round(d.output))} out</span>
+      <span class="sub">${d.requests} req · peak ${fmt(Math.round(d.peak_tpm))}/min</span>
+      ${d.rate_limited > 0 ? `<span class="rlbadge">⛔ ${d.rate_limited} rate-limited</span>` : ""}
+    `;
+    el.appendChild(div);
+  }
+}
+
+// ── refresh ─────────────────────────────────────────────────────────────────
+function setReadout(s) {
+  const last = (s.minutes || []).at(-1);
+  const tpm = last ? last.input + last.output : 0;
+  const totalTok = (s.minutes || []).reduce(
+    (a, m) => a + m.input + m.output,
+    0,
+  );
+  const totalReq = (s.minutes || []).reduce((a, m) => a + m.requests, 0);
+  document.getElementById("r-tpm").textContent = fmt(Math.round(tpm));
+  document.getElementById("r-rpm").textContent = last ? last.requests : 0;
+  document.getElementById("r-peak").textContent = fmt(
+    Math.round(s.peak_tokens || 0),
+  );
+  document.getElementById("r-429").textContent = s.rate_limited_total || 0;
+  document.getElementById("r-total").textContent = fmt(Math.round(totalTok));
+  document.getElementById("r-reqtot").textContent = fmt(totalReq);
+
+  setWindow("w5h", s.latest_u5h || 0);
+  setWindow("w7d", s.latest_u7d || 0);
+
+  const src = document.getElementById("datasrc");
+  if (src)
+    src.textContent = s.has_data
+      ? `log: ${s.log_path}`
+      : "No data yet — start the collector proxy and route a tool through it.";
+}
+
+function renderAll() {
+  if (!snap) return;
+  const last = (snap.minutes || []).at(-1);
+  const tpm = last ? last.input + last.output : 0;
+  const rl = last ? last.rate_limited > 0 : false;
+  drawGauge(tpm, snap.peak_tokens || 0, rl);
+  drawTimeline(snap);
+  drawCalendar(days);
+}
+
+async function tick() {
+  snap = await getSnapshot(rangeMinutes);
+  setReadout(snap);
+  drawTimeline(snap);
+  const last = (snap.minutes || []).at(-1);
+  drawGauge(
+    last ? last.input + last.output : 0,
+    snap.peak_tokens || 0,
+    last ? last.rate_limited > 0 : false,
+  );
+}
+
+async function refreshDays() {
+  days = await getDays(35);
+  drawCalendar(days);
+}
+
+// gauge animates smoothly; data refetched every 2s; days every 30s
+setInterval(tick, 2000);
+setInterval(() => {
+  if (snap) {
+    const last = (snap.minutes || []).at(-1);
+    drawGauge(
+      last ? last.input + last.output : 0,
+      snap.peak_tokens || 0,
+      last ? last.rate_limited > 0 : false,
+    );
+  }
+}, 33);
+setInterval(refreshDays, 30000);
+
+// ── range selector ───────────────────────────────────────────────────────────
+const rangeSelect = document.getElementById("rangeSelect");
+const rangeLabel = {
+  60: "last 60 min",
+  180: "last 3 h",
+  360: "last 6 h",
+  720: "last 12 h",
+  1440: "last 24 h",
+};
+rangeSelect.addEventListener("change", async () => {
+  rangeMinutes = Number(rangeSelect.value);
+  document.getElementById("graph-range").textContent =
+    "(" + (rangeLabel[rangeMinutes] || rangeMinutes + " min") + ")";
+  await tick();
+});
+
+// ── widget mode (compact, gauge only) ────────────────────────────────────────
+let widgetMode = false;
+document.getElementById("widgetBtn").addEventListener("click", async () => {
+  widgetMode = !widgetMode;
+  document.body.classList.toggle("widget", widgetMode);
+  if (tauriWindow) {
+    const win = tauriWindow.getCurrentWindow
+      ? tauriWindow.getCurrentWindow()
+      : null;
+    if (win) {
+      await win.setAlwaysOnTop(widgetMode);
+      await win.setSize(
+        new tauriWindow.LogicalSize(
+          widgetMode ? 320 : 980,
+          widgetMode ? 260 : 760,
+        ),
+      );
+    }
+  }
+});
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+function fmt(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
+// ── demo data (browser dev only, no backend) ─────────────────────────────────
+function demoSnapshot(windowMinutes) {
+  const now = Date.now();
+  const minutes = [];
+  let peak = 0,
+    peakMin = 0,
+    rl = 0;
+  for (let i = windowMinutes; i >= 0; i--) {
+    const minute = (Math.floor(now / 60000) - i) * 60000;
+    const active = Math.random() < 0.7;
+    const base = active
+      ? Math.max(0, Math.sin(i / 9) * 3500 + 3000 + (Math.random() * 2500 - 1000))
+      : 0;
+    const input = Math.round(base * 0.6),
+      output = Math.round(base * 0.4);
+    const requests = base > 0 ? Math.max(1, Math.round(base / 2500)) : 0;
+    const rate_limited = base > 9000 && Math.random() > 0.7 ? 1 : 0;
+    rl += rate_limited;
+    if (input + output > peak) {
+      peak = input + output;
+      peakMin = minute;
+    }
+    minutes.push({
+      minute,
+      input,
+      output,
+      cache_read: 0,
+      cache_write: 0,
+      requests,
+      rate_limited,
+      u5h: Math.min(0.85, i / windowMinutes + 0.1),
+      u7d: 0.3,
+    });
+  }
+  return {
+    minutes,
+    peak_tokens: peak,
+    peak_minute: peakMin,
+    peak_requests: 6,
+    peak_requests_minute: peakMin,
+    rate_limited_total: rl,
+    latest_u5h: 0.58,
+    latest_u7d: 0.34,
+    log_path: "(demo data — no backend detected)",
+    has_data: true,
+  };
+}
+function demoDays(days) {
+  const out = [];
+  const today = Math.floor(Date.now() / 86400000);
+  for (let i = days; i >= 0; i--) {
+    const dt = new Date((today - i) * 86400000);
+    const day = dt.toISOString().slice(0, 10);
+    const off = Math.random() < 0.25;
+    const input = off ? 0 : Math.round(Math.random() * 400000),
+      output = off ? 0 : Math.round(Math.random() * 180000);
+    out.push({
+      day,
+      input,
+      output,
+      cache_read: 0,
+      cache_write: 0,
+      requests: off ? 0 : Math.round(Math.random() * 250),
+      rate_limited: !off && Math.random() > 0.8 ? Math.round(Math.random() * 4) : 0,
+      peak_tpm: off ? 0 : Math.round(Math.random() * 14000),
+    });
+  }
+  return out;
+}
+
+tick();
+refreshDays();
