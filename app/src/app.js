@@ -430,16 +430,30 @@ function renderAll() {
 }
 
 async function tick() {
-  snap = await getSnapshot(rangeMinutes);
-  // Prefer the live qalcode2 rate-limit snapshot for the 5h/7d windows + resets.
-  const live = await getLiveRatelimit();
-  if (live) {
-    if (live.u5h != null) snap.latest_u5h = live.u5h;
-    if (live.u7d != null) snap.latest_u7d = live.u7d;
-    if (live.reset5h) snap.reset5h = live.reset5h;
-    if (live.reset7d) snap.reset7d = live.reset7d;
-    snap.plan = live.plan;
+  try {
+    const s = await getSnapshot(rangeMinutes);
+    if (s) {
+      // PRIMARY source = the user's OWN proxied traffic. The collector logs the
+      // anthropic-ratelimit-unified-* headers (5h/7d utilization + reset times)
+      // from every response, so the limits come straight from the user's account
+      // — no qalcode2 required. We only fall back to an external live source
+      // (qalcode2/opencode /ratelimit, if present) when the log has none yet,
+      // and even then only to fill gaps + add the plan label.
+      const haveLogLimits = s.latest_u5h > 0 || s.latest_u7d > 0;
+      if (liveRl && !haveLogLimits) {
+        if (liveRl.u5h != null) s.latest_u5h = liveRl.u5h;
+        if (liveRl.u7d != null) s.latest_u7d = liveRl.u7d;
+        if (liveRl.reset5h) s.reset5h = liveRl.reset5h;
+        if (liveRl.reset7d) s.reset7d = liveRl.reset7d;
+      }
+      // plan label is a qalcode2-only nicety; show it if we have it
+      if (liveRl && liveRl.plan && !s.plan) s.plan = liveRl.plan;
+      snap = s;
+    }
+  } catch (e) {
+    console.error("[pulse] tick snapshot failed", e);
   }
+  if (!snap) return;
   setReadout(snap);
   drawTimeline(snap);
   const last = (snap.minutes || []).at(-1);
@@ -450,9 +464,28 @@ async function tick() {
   );
 }
 
+// Poll the live rate-limit source on its own cadence so a slow/absent qalcode2
+// can never stall the main snapshot/render loop.
+let liveRl = null;
+async function pollRatelimit() {
+  try {
+    const live = await getLiveRatelimit();
+    if (live) liveRl = live;
+  } catch (e) {
+    console.error("[pulse] ratelimit poll failed", e);
+  }
+}
+
 async function refreshDays() {
-  days = await getDays(35);
-  drawCalendar(days);
+  try {
+    const d = await getDays(35);
+    if (d) {
+      days = d;
+      drawCalendar(days);
+    }
+  } catch (e) {
+    console.error("[pulse] days refresh failed", e);
+  }
 }
 
 // ── responsive canvas sizing ─────────────────────────────────────────────────
@@ -501,7 +534,10 @@ window.addEventListener("resize", layout);
 // initial + after first paint
 requestAnimationFrame(layout);
 
-// gauge animates smoothly; data refetched every 2s; days every 30s
+// gauge animates smoothly; data refetched every 2s; days every 30s;
+// rate-limit polled every 5s on its own loop (never blocks the render)
+pollRatelimit();
+setInterval(pollRatelimit, 5000);
 setInterval(tick, 2000);
 setInterval(() => {
   if (snap) {
@@ -546,6 +582,41 @@ function rangeFromHash() {
 }
 window.addEventListener("hashchange", rangeFromHash);
 rangeFromHash();
+
+// ── tab switching (Dashboard / How it works) ─────────────────────────────────
+function selectTab(name) {
+  document
+    .querySelectorAll("#tabs button")
+    .forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  document
+    .querySelectorAll("main.view")
+    .forEach((m) => m.classList.toggle("active", m.dataset.view === name));
+  if (name === "dashboard") requestAnimationFrame(layout);
+  if (location.hash.replace("#", "") !== name)
+    history.replaceState(null, "", "#" + name);
+}
+document.querySelectorAll("#tabs button").forEach((b) => {
+  b.addEventListener("click", () => selectTab(b.dataset.view));
+});
+{
+  const h = location.hash.replace("#", "");
+  if (h === "about" || h === "dashboard") selectTab(h);
+}
+
+// ── version display ───────────────────────────────────────────────────────────
+async function showVersion() {
+  let v = null;
+  try {
+    if (invoke) v = await invoke("app_version");
+    else if (await probeWebApi()) {
+      const r = await fetch("/api/version", { cache: "no-store" });
+      if (r.ok) v = (await r.json()).version;
+    }
+  } catch {}
+  const el = document.getElementById("version");
+  if (el) el.textContent = v ? "v" + v : "";
+}
+showVersion();
 
 // ── widget mode (compact, gauge only) ────────────────────────────────────────
 let widgetMode = false;

@@ -362,6 +362,8 @@ export function startWeb(port: number): void {
 
       if (p === "/api/health") return json({ ok: true, log: LOG_FILE });
 
+      if (p === "/api/version") return json({ version: "0.2.0" });
+
       if (p === "/api/ratelimit") {
         const rl = await getLiveRatelimit();
         return json(rl ?? { available: false });
@@ -375,14 +377,21 @@ export function startWeb(port: number): void {
         const bucketParam = url.searchParams.get("bucket");
         const bucket = bucketParam ? Number(bucketParam) : 0;
         const snap = buildSnapshot(await readLines(), minutes, bucket);
-        // Overlay the live rate-limit snapshot (real 5h/7d + reset times) if
-        // available — this is more authoritative than the log-derived values.
+        // PRIMARY source is the user's OWN proxied traffic — the collector logs
+        // the anthropic-ratelimit-unified-* headers (5h/7d + reset times) from
+        // every response, so the limits come from the user's account with no
+        // external dependency. An optional qalcode2/opencode /ratelimit endpoint
+        // is used ONLY to fill gaps when the log has no rate-limit data yet, and
+        // to add the (qalcode2-derived) plan label.
+        const haveLogLimits = snap.latest_u5h > 0 || snap.latest_u7d > 0;
         const live = await getLiveRatelimit();
         if (live) {
-          if (live.u5h != null) snap.latest_u5h = live.u5h;
-          if (live.u7d != null) snap.latest_u7d = live.u7d;
-          if (live.reset5h) snap.reset5h = live.reset5h;
-          if (live.reset7d) snap.reset7d = live.reset7d;
+          if (!haveLogLimits) {
+            if (live.u5h != null) snap.latest_u5h = live.u5h;
+            if (live.u7d != null) snap.latest_u7d = live.u7d;
+            if (live.reset5h) snap.reset5h = live.reset5h;
+            if (live.reset7d) snap.reset7d = live.reset7d;
+          }
           (snap as any).plan = live.plan;
           (snap as any).rl_status = live.status;
         }

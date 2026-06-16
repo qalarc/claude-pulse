@@ -11,13 +11,17 @@
       <div class="brand">
         <span class="dot"></span> Claude&nbsp;<b>Pulse</b>
       </div>
+      <nav id="tabs">
+        <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="about">How it works</button>
+      </nav>
       <div class="spacer"></div>
       <button id="widgetBtn" title="Toggle compact always-on-top widget">
         ⊟ Widget
       </button>
     </header>
 
-    <main id="dash">
+    <main id="dash" class="view active" data-view="dashboard">
       <!-- TOP ROW: live gauge + key stat tiles -->
       <section class="row top">
         <div class="card gaugecard">
@@ -109,8 +113,116 @@
       </section>
     </main>
 
+    <!-- HOW IT WORKS -->
+    <main id="about" class="view" data-view="about">
+      <section class="card prose">
+        <h2>How Claude Pulse works</h2>
+        <p>
+          Claude Pulse is a <b>local-first</b> usage monitor. It watches your own
+          Claude API traffic and visualizes it — it never sends your prompts,
+          completions, or credentials anywhere. Everything stays on your machine.
+        </p>
+
+        <h3>1 · How it collects data</h3>
+        <p>
+          A tiny zero-dependency <b>collector proxy</b> sits between your Claude
+          tools and Anthropic. You point a tool at it with
+          <code>ANTHROPIC_BASE_URL=http://localhost:8787</code>; it transparently
+          forwards every request to <code>api.anthropic.com</code> and streams the
+          response straight back, untouched.
+        </p>
+        <div class="flow">
+          <span class="node">Claude&nbsp;tools</span>
+          <span class="arrow">→</span>
+          <span class="node hi">collector proxy</span>
+          <span class="arrow">→</span>
+          <span class="node">api.anthropic.com</span>
+        </div>
+        <p>
+          As each response passes through, the collector records
+          <b>metadata only</b> to an append-only log
+          (<code id="about-log">~/.local/share/claude-pulse/usage.jsonl</code>):
+        </p>
+        <ul>
+          <li>token counts from the response <code>usage</code> object (input / output / cache)</li>
+          <li>the <code>anthropic-ratelimit-*</code> headers (utilization + reset times)</li>
+          <li>HTTP status, 429s, and timing</li>
+        </ul>
+        <p class="note">
+          It <b>never</b> writes prompt text, completion text, or your auth token.
+          The desktop app and the web dashboard simply read this log and aggregate
+          it into the gauge, the per-minute graph, and the daily calendar.
+        </p>
+
+        <h3>2 · Where the live limits come from</h3>
+        <p>
+          The 5-hour (“current session”) and 7-day (“weekly, all models”) windows —
+          and their reset countdowns — are the <b>real</b> values Anthropic returns
+          to <i>you</i>. Every response that passes through the collector carries
+          <code>anthropic-ratelimit-unified-*</code> headers; the collector logs
+          them, so <b>the limits come straight from your own traffic</b> — no extra
+          software required. Just keep using Claude through the collector and the
+          bars stay current.
+        </p>
+        <p class="note">
+          Optional: if you happen to run a qalcode2 / opencode server locally, Pulse
+          will also read its <code>/ratelimit</code> endpoint to fill the windows in
+          <i>before</i> your first proxied request and to show your plan label — but
+          this is a bonus, not a requirement. With only an API key (no Pro/Max
+          OAuth) the unified windows don’t exist, so those bars stay empty by
+          design while your token/request counts still graph normally.
+        </p>
+
+        <h3>3 · What happens when you swap subscriptions</h3>
+        <p>
+          The limits Pulse displays are <b>tied to whichever account / plan made the
+          request</b>, because they come from that request’s response headers:
+        </p>
+        <ul>
+          <li>
+            <b>Upgrading</b> (e.g. Pro → Max, or Max 5× → Max 20×): your ceilings
+            rise, so the same workload reads as a <i>lower</i> utilization
+            percentage. The 5h/7d bars drop and the “Max&nbsp;20×” plan label
+            updates on the next request after the new plan is active.
+          </li>
+          <li>
+            <b>Downgrading</b>: ceilings shrink — the same usage now reads as a
+            <i>higher</i> percentage, and you’ll hit 429s sooner. Pulse will start
+            showing the red rate-limit markers earlier.
+          </li>
+          <li>
+            <b>Switching account / auth (API key ↔ OAuth)</b>: the metric model
+            changes. OAuth/subscription shows unified 5h/7d windows; API-key billing
+            shows tokens/requests-remaining instead. Pulse renders whichever set the
+            headers provide.
+          </li>
+          <li>
+            <b>History is preserved</b>: the graph and calendar keep showing past
+            token usage across the swap (it’s your raw traffic). Only the
+            <i>percentage</i> readings re-baseline to the new plan’s limits — the
+            absolute tokens you sent don’t change retroactively.
+          </li>
+        </ul>
+        <p class="note">
+          Tip: right after switching plans, make one request through the collector
+          so a fresh set of rate-limit headers is captured and the windows + plan
+          label update.
+        </p>
+
+        <h3>4 · Privacy &amp; safety</h3>
+        <ul>
+          <li><b>Metadata only</b> — never prompts, completions, or tokens.</li>
+          <li><b>Local-first</b> — no account, no cloud, no telemetry.</li>
+          <li><b>Transparent proxy</b> — requests/responses stream through untouched.</li>
+          <li><b>Read-your-own-account</b> — all limit data comes from headers Anthropic returns to <i>you</i>. No probing or brute-forcing.</li>
+        </ul>
+      </section>
+    </main>
+
     <footer id="status">
       <span id="datasrc">reading usage log…</span>
+      <span class="spacer"></span>
+      <span id="version" class="version"></span>
     </footer>
 
     <script type="module" src="app.js"></script>

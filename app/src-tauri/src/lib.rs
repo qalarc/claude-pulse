@@ -339,8 +339,11 @@ pub struct LiveRatelimit {
 
 /// Minimal HTTP/1.0 GET over TCP — no external deps. Returns the body string.
 fn http_get(host: &str, port: u16, path: &str, timeout_ms: u64) -> Option<String> {
-    let addr = format!("{host}:{port}");
-    let mut stream = TcpStream::connect(&addr).ok()?;
+    let addr: std::net::SocketAddr = format!("{host}:{port}").parse().ok()?;
+    // connect_timeout is essential: a plain TcpStream::connect to a filtered or
+    // unresponsive port can block for tens of seconds and freeze the UI poll.
+    let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
         .ok()?;
@@ -414,29 +417,65 @@ fn parse_ratelimit(body: &str, source: &str) -> Option<LiveRatelimit> {
     })
 }
 
+// Cache: (last_result, fetched_at_ms, last_good_port). Avoids rescanning every
+// 2s poll and keeps the UI responsive even when no source is present.
+static RL_CACHE: std::sync::OnceLock<std::sync::Mutex<(LiveRatelimit, i64, Option<u16>)>> =
+    std::sync::OnceLock::new();
+
 /// Poll qalcode2's /ratelimit for the live 5h/7d windows + reset times.
 /// Honors CLAUDE_PULSE_RATELIMIT_URL (host:port or full URL) if set.
 #[tauri::command]
 fn ratelimit() -> LiveRatelimit {
-    // explicit override
+    let cache = RL_CACHE.get_or_init(|| std::sync::Mutex::new((LiveRatelimit::default(), 0, None)));
+    let now = now_ms();
+    // serve cached result if fresh (< 4s old)
+    if let Ok(guard) = cache.lock() {
+        if now - guard.1 < 4000 {
+            return guard.0.clone();
+        }
+    }
+
+    let mut result = LiveRatelimit::default();
+    let mut good_port: Option<u16> = None;
+
+    // 1) explicit override (strict — no scanning)
     if let Ok(url) = std::env::var("CLAUDE_PULSE_RATELIMIT_URL") {
         if let Some((host, port, path)) = split_url(&url) {
-            if let Some(body) = http_get(&host, port, &path, 1500) {
+            if let Some(body) = http_get(&host, port, &path, 1200) {
                 if let Some(rl) = parse_ratelimit(&body, &url) {
-                    return rl;
+                    result = rl;
+                }
+            }
+        }
+    } else {
+        // 2) try the last-known-good port first (fast path), then scan
+        let mut ports: Vec<u16> = Vec::new();
+        if let Ok(guard) = cache.lock() {
+            if let Some(p) = guard.2 {
+                ports.push(p);
+            }
+        }
+        for p in local_listen_ports() {
+            if !ports.contains(&p) {
+                ports.push(p);
+            }
+        }
+        for port in ports {
+            if let Some(body) = http_get("127.0.0.1", port, "/ratelimit", 800) {
+                let src = format!("http://127.0.0.1:{port}/ratelimit");
+                if let Some(rl) = parse_ratelimit(&body, &src) {
+                    result = rl;
+                    good_port = Some(port);
+                    break;
                 }
             }
         }
     }
-    for port in local_listen_ports() {
-        if let Some(body) = http_get("127.0.0.1", port, "/ratelimit", 1200) {
-            let src = format!("http://127.0.0.1:{port}/ratelimit");
-            if let Some(rl) = parse_ratelimit(&body, &src) {
-                return rl;
-            }
-        }
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = (result.clone(), now, good_port.or(guard.2));
     }
-    LiveRatelimit::default()
+    result
 }
 
 fn split_url(url: &str) -> Option<(String, u16, String)> {
@@ -452,11 +491,22 @@ fn split_url(url: &str) -> Option<(String, u16, String)> {
     Some((host, port, path.to_string()))
 }
 
+/// App version (from Cargo.toml) so the UI can show which build is running.
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![snapshot, day_summaries, ratelimit])
+        .invoke_handler(tauri::generate_handler![
+            snapshot,
+            day_summaries,
+            ratelimit,
+            app_version
+        ])
         .run(tauri::generate_context!())
         .expect("error while running claude-pulse");
 }

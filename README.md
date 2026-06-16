@@ -81,11 +81,14 @@ Yes — locally, with no configuration:
 - **The graph + per-minute usage + 429 markers** work for **anyone** the moment they
   run the collector and route a Claude tool through it. The data is their own
   `usage.jsonl`; nothing else is needed.
-- **The real 5-hour / 7-day windows + "resets in" countdowns + plan label** appear
-  **automatically if a qalcode2/opencode server is running** on the same machine —
-  Claude Pulse auto-discovers its local `/ratelimit` endpoint (scans local ports).
-  No setup; if it's not running, those bars simply stay empty and everything else
-  still works. (You can pin the source with `CLAUDE_PULSE_RATELIMIT_URL`.)
+- **The real 5-hour / 7-day windows + "resets in" countdowns** come from **your own
+  proxied traffic** — the collector logs the `anthropic-ratelimit-unified-*` headers
+  (utilization + reset times) on every response, so the limits reflect your account
+  with **no extra software**. Just keep using Claude through the collector.
+- _Optional bonus:_ if a qalcode2/opencode server happens to be running locally,
+  Pulse also reads its `/ratelimit` endpoint to populate the windows *before* your
+  first proxied request and to show your plan label. This is **not required** — pin
+  it with `CLAUDE_PULSE_RATELIMIT_URL` or ignore it entirely.
 - **API-key-only users** don't have OAuth 5h/7d windows at all (those are a
   Pro/Max subscription concept), so the window bars won't populate for them — by
   design. Their token/request counts and graph still work.
