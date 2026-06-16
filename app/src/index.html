@@ -128,54 +128,62 @@
           completions, or credentials anywhere. Everything stays on your machine.
         </p>
 
-        <h3>1 · How it collects data</h3>
+        <h3>1 · How it collects data — two sources</h3>
         <p>
-          A tiny zero-dependency <b>collector proxy</b> sits between your Claude
-          tools and Anthropic. You point a tool at it with
-          <code>ANTHROPIC_BASE_URL=http://localhost:8787</code>; it transparently
-          forwards every request to <code>api.anthropic.com</code> and streams the
-          response straight back, untouched.
+          Claude Pulse gets <b>metadata only</b> (never prompts, completions, or
+          your auth token) from whichever of these is available, and writes it to
+          an append-only log
+          (<code id="about-log">~/.local/share/claude-pulse/usage.jsonl</code>)
+          that the app and dashboard read:
+        </p>
+        <p><b>A · A live opencode / qalcode2 server (primary).</b> If one is
+          running, Pulse polls its HTTP API
+          (<code>GET /session/:id/message</code>) for each assistant message's real
+          token counts, and <code>GET /ratelimit</code> for the 5h/7d windows.
+          This is how your tokens/min populates with <b>no proxy and no setup</b>.
+          If several servers are running (old + current sessions), Pulse always
+          picks the <b>freshest</b> one (newest snapshot) so you never see another
+          session's stale data.
+        </p>
+        <div class="flow">
+          <span class="node hi">opencode / qalcode2</span>
+          <span class="arrow">→</span>
+          <span class="node">/session, /ratelimit</span>
+          <span class="arrow">→</span>
+          <span class="node">usage.jsonl</span>
+        </div>
+        <p><b>B · The collector proxy (any tool).</b> For tools that don't expose an
+          API, point them at the proxy with
+          <code>ANTHROPIC_BASE_URL=http://localhost:8787</code>. It transparently
+          forwards every request to <code>api.anthropic.com</code>, streams the
+          response back untouched, and records the <code>usage</code> object +
+          <code>anthropic-ratelimit-*</code> headers + status/timing.
         </p>
         <div class="flow">
           <span class="node">Claude&nbsp;tools</span>
           <span class="arrow">→</span>
-          <span class="node hi">collector proxy</span>
+          <span class="node hi">collector proxy :8787</span>
           <span class="arrow">→</span>
           <span class="node">api.anthropic.com</span>
         </div>
-        <p>
-          As each response passes through, the collector records
-          <b>metadata only</b> to an append-only log
-          (<code id="about-log">~/.local/share/claude-pulse/usage.jsonl</code>):
-        </p>
+
+        <h3>2 · What each number means</h3>
         <ul>
-          <li>token counts from the response <code>usage</code> object (input / output / cache)</li>
-          <li>the <code>anthropic-ratelimit-*</code> headers (utilization + reset times)</li>
-          <li>HTTP status, 429s, and timing</li>
+          <li><b>Tokens / min</b> graphs <code>input + output</code> per minute.
+            Cache <i>reads</i> are excluded (they're cheap context re-reads;
+            Anthropic excludes them from rate-limit accounting too) — so the
+            headline number is "new" token throughput, not raw context size.</li>
+          <li><b>5-hour / 7-day windows</b> are the <b>real</b> utilization values
+            Anthropic returns for your account (the
+            <code>anthropic-ratelimit-unified-*</code> headers), with live "resets
+            in" countdowns and your plan label (e.g. Max&nbsp;20×).</li>
+          <li><b>Rate-limit (429) marks</b> show where you got throttled, on the
+            graph and as history ticks on the gauge.</li>
         </ul>
         <p class="note">
-          It <b>never</b> writes prompt text, completion text, or your auth token.
-          The desktop app and the web dashboard simply read this log and aggregate
-          it into the gauge, the per-minute graph, and the daily calendar.
-        </p>
-
-        <h3>2 · Where the live limits come from</h3>
-        <p>
-          The 5-hour (“current session”) and 7-day (“weekly, all models”) windows —
-          and their reset countdowns — are the <b>real</b> values Anthropic returns
-          to <i>you</i>. Every response that passes through the collector carries
-          <code>anthropic-ratelimit-unified-*</code> headers; the collector logs
-          them, so <b>the limits come straight from your own traffic</b> — no extra
-          software required. Just keep using Claude through the collector and the
-          bars stay current.
-        </p>
-        <p class="note">
-          Optional: if you happen to run a qalcode2 / opencode server locally, Pulse
-          will also read its <code>/ratelimit</code> endpoint to fill the windows in
-          <i>before</i> your first proxied request and to show your plan label — but
-          this is a bonus, not a requirement. With only an API key (no Pro/Max
-          OAuth) the unified windows don’t exist, so those bars stay empty by
-          design while your token/request counts still graph normally.
+          With only a plain API key (no Pro/Max OAuth) the unified 5h/7d windows
+          don't exist, so those bars stay empty by design — token/request counts
+          still graph normally.
         </p>
 
         <h3>3 · What happens when you swap subscriptions</h3>
