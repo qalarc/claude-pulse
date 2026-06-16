@@ -20,6 +20,7 @@
 
 import { appendFile } from "fs/promises";
 import { spawnSync } from "child_process";
+import { importOpencodeUsage, opencodeDbExists, opencodeDbPath } from "./opencode-source.ts";
 
 export type RatelimitSample = {
   t: number; // epoch ms
@@ -133,8 +134,10 @@ export function startPoller(
 ): { stop: () => void } {
   let stopped = false;
   let announced = false;
+  let ocAnnounced = false;
   const tick = async () => {
     if (stopped) return;
+    // 1) rate-limit windows (5h/7d %) from a live /ratelimit endpoint
     const s = await pollOnce(logFile).catch(() => null);
     if (s && !announced) {
       announced = true;
@@ -142,6 +145,19 @@ export function startPoller(
         `[claude-pulse] rate-limit poller active — source: ${s.source}` +
           (s.plan ? ` (${s.plan})` : ""),
       );
+    }
+    // 2) REAL tokens/min from opencode/qalcode2's local DB (no proxy needed)
+    if (opencodeDbExists()) {
+      const n = await importOpencodeUsage(logFile).catch(() => 0);
+      if (!ocAnnounced) {
+        ocAnnounced = true;
+        console.log(
+          `[claude-pulse] reading token usage from opencode DB: ${opencodeDbPath()}`,
+        );
+      }
+      if (n > 0) {
+        console.log(`[claude-pulse] imported ${n} new token messages`);
+      }
     }
   };
   tick();
