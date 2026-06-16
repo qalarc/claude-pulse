@@ -251,29 +251,50 @@ function drawTimeline(s) {
   const pad = { l: 56, r: 14, t: 18, b: 28 };
   const plotW = w - pad.l - pad.r,
     plotH = h - pad.t - pad.b;
-  // The token graph is about REQUESTS — drop buckets that only contain
-  // rate-limit utilization samples (no requests/tokens) so they don't show as
-  // phantom flat-zero bars.
-  const mins = (s.minutes || []).filter(
+  // Build a DENSE, evenly-spaced series: one slot per bucket-interval across the
+  // ENTIRE window, with empty intervals as zero bars. The backend only returns
+  // non-empty buckets, so packing those together would distort the time axis
+  // (e.g. 7 bursts shown as if contiguous). Filling the gaps makes the x-axis a
+  // true time scale — "last 60 min" = 60 one-minute slots.
+  const bucketMin = s.bucket_minutes || 1;
+  const bucketMs = bucketMin * 60000;
+  const rawMins = (s.minutes || []).filter(
     (m) => m.requests > 0 || m.input > 0 || m.output > 0,
   );
-  if (mins.length === 0) {
+  if (rawMins.length === 0) {
     tctx.fillStyle = "#7a8294";
     tctx.textAlign = "center";
     tctx.font = "13px ui-monospace, monospace";
-    tctx.fillText(
-      "No token usage yet — route a Claude tool through the proxy",
-      w / 2,
-      h / 2 - 8,
-    );
+    tctx.fillText("No token usage in this window yet", w / 2, h / 2 - 8);
     tctx.fillStyle = "#5a6172";
     tctx.font = "11px ui-monospace, monospace";
     tctx.fillText(
-      "export ANTHROPIC_BASE_URL=http://localhost:47821",
+      "use Claude (opencode/qalcode2 running) and it'll appear",
       w / 2,
       h / 2 + 12,
     );
     return;
+  }
+  // span the full requested window, aligned to bucket boundaries, ending "now"
+  const nowMs = Date.now();
+  const windowMin = s.window_minutes || rangeMinutes || 60;
+  const endSlot = Math.floor(nowMs / bucketMs) * bucketMs;
+  const startSlot = endSlot - (Math.ceil(windowMin / bucketMin) - 1) * bucketMs;
+  const byMinute = new Map(rawMins.map((m) => [m.minute, m]));
+  const mins = [];
+  for (let t = startSlot; t <= endSlot; t += bucketMs) {
+    mins.push(
+      byMinute.get(t) || {
+        minute: t,
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        requests: 0,
+        rate_limited: 0,
+        u5h: 0,
+        u7d: 0,
+      },
+    );
   }
   const total = (m) => m.input + m.output;
   const maxTok = Math.max(...mins.map(total), 1);
@@ -311,7 +332,6 @@ function drawTimeline(s) {
   //   per-minute/15m  → HH:MM
   //   hourly          → "Mon HH:00"
   //   daily           → "M/D"
-  const bucketMin = s.bucket_minutes || 1;
   tctx.textAlign = "center";
   tctx.fillStyle = "#7a8294";
   tctx.font = "10px ui-monospace, monospace";
@@ -335,11 +355,31 @@ function drawTimeline(s) {
       String(d.getMinutes()).padStart(2, "0")
     );
   };
-  const ticks = Math.min(bucketMin >= 1440 ? 8 : 6, n);
+  const ticks = Math.min(bucketMin >= 1440 ? 8 : 7, n);
   for (let t = 0; t < ticks; t++) {
     const i = Math.round((t * (n - 1)) / Math.max(1, ticks - 1));
-    tctx.fillText(fmtTick(mins[i].minute), xMid(i), pad.t + plotH + 18);
+    const tx = xMid(i);
+    // light vertical gridline so the time scale is readable
+    tctx.strokeStyle = "#1c2029";
+    tctx.lineWidth = 1;
+    tctx.beginPath();
+    tctx.moveTo(tx, pad.t);
+    tctx.lineTo(tx, pad.t + plotH);
+    tctx.stroke();
+    tctx.fillStyle = "#8a93a6";
+    tctx.fillText(fmtTick(mins[i].minute), tx, pad.t + plotH + 18);
   }
+  // axis caption: total span + bucket size, so the scale is unambiguous
+  tctx.textAlign = "left";
+  tctx.fillStyle = "#5a6172";
+  tctx.font = "9px ui-monospace, monospace";
+  const spanLabel =
+    bucketMin >= 1440
+      ? `${Math.round(windowMin / 1440)}d · 1 bar = 1 day`
+      : bucketMin >= 60
+        ? `${Math.round(windowMin / 60)}h · 1 bar = ${bucketMin / 60}h`
+        : `${windowMin}m · 1 bar = ${bucketMin}m`;
+  tctx.fillText(spanLabel, pad.l, h - 2);
 
   // stacked input/output bars
   mins.forEach((m, i) => {
@@ -463,7 +503,7 @@ function drawLimHist(s) {
   // fit to CSS width × dpr
   const dpr = window.devicePixelRatio || 1;
   const cssW = limhist.parentElement.clientWidth;
-  const cssH = 70;
+  const cssH = 44;
   if (limhist.width !== Math.round(cssW * dpr)) {
     limhist.width = Math.round(cssW * dpr);
     limhist.height = Math.round(cssH * dpr);
@@ -555,9 +595,27 @@ function drawCalendar(list) {
 }
 
 // ── refresh ─────────────────────────────────────────────────────────────────
+// "Tokens/min now" = the most recent minute that actually has tokens, within the
+// last ~2 minutes. Turns are bursty (a big completed message then a gap until the
+// next finishes), so reading only the current calendar-minute flickers to 0
+// between turns. Looking back up to 2 minutes keeps the live number meaningful.
+function currentTpm(s) {
+  const mins = s.minutes || [];
+  if (!mins.length) return 0;
+  const nowMin = Math.floor(Date.now() / 60000) * 60000;
+  // scan from newest backwards, but only within the last 2 minutes
+  for (let i = mins.length - 1; i >= 0; i--) {
+    const m = mins[i];
+    if (nowMin - m.minute > 2 * 60000) break;
+    const tok = (m.input || 0) + (m.output || 0);
+    if (tok > 0) return tok;
+  }
+  return 0;
+}
+
 function setReadout(s) {
   const last = (s.minutes || []).at(-1);
-  const tpm = last ? last.input + last.output : 0;
+  const tpm = currentTpm(s);
   const totalTok = (s.minutes || []).reduce(
     (a, m) => a + m.input + m.output,
     0,
@@ -629,7 +687,7 @@ function setReadout(s) {
 function renderAll() {
   if (!snap) return;
   const last = (snap.minutes || []).at(-1);
-  const tpm = last ? last.input + last.output : 0;
+  const tpm = currentTpm(snap);
   const rl = last ? last.rate_limited > 0 : false;
   drawGauge(tpm, snap.peak_tokens || 0, rl);
   drawTimeline(snap);
@@ -677,7 +735,7 @@ async function tick() {
   drawLimHist(snap);
   const last = (snap.minutes || []).at(-1);
   drawGauge(
-    last ? last.input + last.output : 0,
+    currentTpm(snap),
     snap.peak_tokens || 0,
     last ? last.rate_limited > 0 : false,
   );
@@ -740,15 +798,15 @@ function fitCanvas(canvas, cssHeight, maxWidth) {
 function layout() {
   // gauge: compact, capped so it doesn't dominate the viewport
   const gaugeCardW = gauge.parentElement.clientWidth - 12;
-  const gaugeH = Math.min(220, Math.max(170, gaugeCardW * 0.58));
-  fitCanvas(gauge, gaugeH, Math.round(gaugeH * 1.5));
+  const gaugeH = Math.min(195, Math.max(160, gaugeCardW * 0.52));
+  fitCanvas(gauge, gaugeH, Math.round(gaugeH * 1.55));
   // timeline: fill width, height scales with window (compact)
-  const tlH = Math.min(360, Math.max(200, window.innerHeight * 0.3));
+  const tlH = Math.min(320, Math.max(180, window.innerHeight * 0.28));
   fitCanvas(timeline, tlH);
   if (snap) {
     const last = (snap.minutes || []).at(-1);
     drawGauge(
-      last ? last.input + last.output : 0,
+      currentTpm(snap),
       snap.peak_tokens || 0,
       last ? last.rate_limited > 0 : false,
     );
@@ -806,7 +864,7 @@ setInterval(() => {
   if (snap) {
     const last = (snap.minutes || []).at(-1);
     drawGauge(
-      last ? last.input + last.output : 0,
+      currentTpm(snap),
       snap.peak_tokens || 0,
       last ? last.rate_limited > 0 : false,
     );
