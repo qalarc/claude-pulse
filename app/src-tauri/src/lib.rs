@@ -26,6 +26,10 @@ struct RawLine {
     u5h: Option<f64>,
     #[serde(default)]
     u7d: Option<f64>,
+    #[serde(rename = "reset5h", default)]
+    reset5h: Option<f64>,
+    #[serde(rename = "reset7d", default)]
+    reset7d: Option<f64>,
     #[serde(default)]
     model: Option<String>,
 }
@@ -59,6 +63,9 @@ pub struct Snapshot {
     /// latest unified utilization seen (most recent non-empty)
     latest_u5h: f64,
     latest_u7d: f64,
+    /// epoch SECONDS when each rolling window resets (0 if unknown)
+    reset5h: f64,
+    reset7d: f64,
     /// log file path (for the UI to show)
     log_path: String,
     /// whether the log file exists
@@ -105,6 +112,8 @@ fn snapshot(window_minutes: i64) -> Snapshot {
     let mut buckets: BTreeMap<i64, MinuteBucket> = BTreeMap::new();
     let mut latest_u5h = 0.0;
     let mut latest_u7d = 0.0;
+    let mut latest_reset5h = 0.0;
+    let mut latest_reset7d = 0.0;
     let mut latest_t = 0i64;
 
     for l in &lines {
@@ -117,6 +126,12 @@ fn snapshot(window_minutes: i64) -> Snapshot {
                 }
                 if let Some(v) = l.u7d {
                     latest_u7d = v;
+                }
+                if let Some(v) = l.reset5h {
+                    latest_reset5h = v;
+                }
+                if let Some(v) = l.reset7d {
+                    latest_reset7d = v;
                 }
             }
             continue;
@@ -152,6 +167,12 @@ fn snapshot(window_minutes: i64) -> Snapshot {
             if let Some(v) = l.u7d {
                 latest_u7d = v;
             }
+            if let Some(v) = l.reset5h {
+                latest_reset5h = v;
+            }
+            if let Some(v) = l.reset7d {
+                latest_reset7d = v;
+            }
         }
     }
 
@@ -184,6 +205,8 @@ fn snapshot(window_minutes: i64) -> Snapshot {
         rate_limited_total,
         latest_u5h,
         latest_u7d,
+        reset5h: latest_reset5h,
+        reset7d: latest_reset7d,
         log_path: log_path().to_string_lossy().to_string(),
         has_data: !lines.is_empty(),
     }

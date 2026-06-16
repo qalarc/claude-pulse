@@ -61,24 +61,24 @@
         </div>
       </section>
 
-      <!-- ROLLING-WINDOW LIMITS: 5h + 7d utilization -->
+      <!-- ROLLING-WINDOW LIMITS: 5h (session) + 7d (weekly) utilization -->
       <section class="card windows">
-        <h2>Rolling rate-limit windows</h2>
+        <h2>Usage limits</h2>
         <div class="winrow">
           <div class="winhead">
-            <span class="wlabel">5-hour window</span>
+            <span class="wlabel">Current session <span class="wmeta">· 5-hour window</span></span>
             <span id="w5h-pct" class="wpct">–</span>
           </div>
           <div class="wbar"><div id="w5h-fill" class="wfill"></div></div>
-          <div id="w5h-note" class="wnote">utilization of your rolling 5-hour limit</div>
+          <div id="w5h-note" class="wnote">resets in –</div>
         </div>
         <div class="winrow">
           <div class="winhead">
-            <span class="wlabel">7-day window</span>
+            <span class="wlabel">Weekly limit <span class="wmeta">· all models · 7-day window</span></span>
             <span id="w7d-pct" class="wpct">–</span>
           </div>
           <div class="wbar"><div id="w7d-fill" class="wfill"></div></div>
-          <div id="w7d-note" class="wnote">utilization of your rolling 7-day limit</div>
+          <div id="w7d-note" class="wnote">resets in –</div>
         </div>
       </section>
 

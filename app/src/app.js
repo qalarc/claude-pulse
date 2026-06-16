@@ -65,8 +65,8 @@ const gauge = document.getElementById("gauge");
 const gctx = gauge.getContext("2d");
 
 function drawGauge(tpm, peakTpm, rateLimited) {
-  const w = gauge.width,
-    h = gauge.height;
+  const w = gauge._cssW || gauge.width,
+    h = gauge._cssH || gauge.height;
   const cx = w / 2,
     cy = h * 0.82,
     r = Math.min(w, h) * 0.62;
@@ -149,8 +149,8 @@ const timeline = document.getElementById("timeline");
 const tctx = timeline.getContext("2d");
 
 function drawTimeline(s) {
-  const w = timeline.width,
-    h = timeline.height;
+  const w = timeline._cssW || timeline.width,
+    h = timeline._cssH || timeline.height;
   tctx.clearRect(0, 0, w, h);
   const pad = { l: 56, r: 14, t: 18, b: 28 };
   const plotW = w - pad.l - pad.r,
@@ -293,19 +293,33 @@ function drawTimeline(s) {
 }
 
 // ── 5h / 7d rolling windows ─────────────────────────────────────────────────
-function setWindow(prefix, frac) {
+// `resetEpochSec` is the epoch-seconds at which the window resets (0 = unknown).
+function setWindow(prefix, frac, resetEpochSec) {
   const pctEl = document.getElementById(prefix + "-pct");
   const fillEl = document.getElementById(prefix + "-fill");
+  const noteEl = document.getElementById(prefix + "-note");
   if (frac == null || Number.isNaN(frac)) {
     pctEl.textContent = "–";
     fillEl.style.width = "0%";
-    return;
+  } else {
+    const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+    pctEl.textContent = pct + "% used";
+    fillEl.style.width = pct + "%";
+    pctEl.style.color =
+      pct >= 85 ? "var(--rl)" : pct >= 60 ? "var(--peak)" : "var(--text)";
   }
-  const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
-  pctEl.textContent = pct + "%";
-  fillEl.style.width = pct + "%";
-  pctEl.style.color =
-    pct >= 85 ? "var(--rl)" : pct >= 60 ? "var(--peak)" : "var(--text)";
+  if (noteEl) noteEl.textContent = "resets in " + fmtReset(resetEpochSec);
+}
+
+// Format a "resets in Xh Ym" string from an epoch-seconds reset timestamp.
+function fmtReset(resetEpochSec) {
+  if (!resetEpochSec) return "–";
+  const secs = Math.round(resetEpochSec - Date.now() / 1000);
+  if (secs <= 0) return "now";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `${h} hr ${m} min`;
+  return `${m} min`;
 }
 
 // ── calendar ────────────────────────────────────────────────────────────────
@@ -349,8 +363,8 @@ function setReadout(s) {
   document.getElementById("r-total").textContent = fmt(Math.round(totalTok));
   document.getElementById("r-reqtot").textContent = fmt(totalReq);
 
-  setWindow("w5h", s.latest_u5h || 0);
-  setWindow("w7d", s.latest_u7d || 0);
+  setWindow("w5h", s.latest_u5h || 0, s.reset5h || 0);
+  setWindow("w7d", s.latest_u7d || 0, s.reset7d || 0);
 
   const src = document.getElementById("datasrc");
   if (src)
@@ -385,6 +399,52 @@ async function refreshDays() {
   days = await getDays(35);
   drawCalendar(days);
 }
+
+// ── responsive canvas sizing ─────────────────────────────────────────────────
+// Size each canvas to its container's CSS box × devicePixelRatio so it stays
+// crisp and fills the available space when the window is resized/enlarged.
+function fitCanvas(canvas, cssHeight, maxWidth) {
+  const dpr = window.devicePixelRatio || 1;
+  const parent = canvas.parentElement;
+  let cssW = parent.clientWidth - 2; // minus border
+  if (maxWidth) cssW = Math.min(cssW, maxWidth);
+  const cssH = cssHeight;
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
+  const needW = Math.round(cssW * dpr);
+  const needH = Math.round(cssH * dpr);
+  if (canvas.width !== needW || canvas.height !== needH) {
+    canvas.width = needW;
+    canvas.height = needH;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Drawing code uses canvas.width/height; expose CSS px via these:
+  canvas._cssW = cssW;
+  canvas._cssH = cssH;
+}
+
+function layout() {
+  // gauge: keep roughly 1.4:1 and capped so it doesn't balloon on wide windows
+  const gaugeCardW = gauge.parentElement.clientWidth - 16;
+  const gaugeH = Math.min(300, Math.max(200, gaugeCardW * 0.66));
+  fitCanvas(gauge, gaugeH, Math.round(gaugeH * 1.45));
+  // timeline: fill width, height scales with window
+  const tlH = Math.min(440, Math.max(240, window.innerHeight * 0.36));
+  fitCanvas(timeline, tlH);
+  if (snap) {
+    const last = (snap.minutes || []).at(-1);
+    drawGauge(
+      last ? last.input + last.output : 0,
+      snap.peak_tokens || 0,
+      last ? last.rate_limited > 0 : false,
+    );
+    drawTimeline(snap);
+  }
+}
+window.addEventListener("resize", layout);
+// initial + after first paint
+requestAnimationFrame(layout);
 
 // gauge animates smoothly; data refetched every 2s; days every 30s
 setInterval(tick, 2000);
@@ -485,8 +545,10 @@ function demoSnapshot(windowMinutes) {
     peak_requests: 6,
     peak_requests_minute: peakMin,
     rate_limited_total: rl,
-    latest_u5h: 0.58,
-    latest_u7d: 0.34,
+    latest_u5h: 0.2,
+    latest_u7d: 0.9,
+    reset5h: Math.floor(now / 1000) + (4 * 3600 + 35 * 60), // ~4h35m
+    reset7d: Math.floor(now / 1000) + (8 * 3600 + 35 * 60), // ~8h35m
     log_path: "(demo data — no backend detected)",
     has_data: true,
   };

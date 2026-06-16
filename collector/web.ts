@@ -37,6 +37,8 @@ type Raw = {
   rateLimited?: boolean;
   u5h?: number;
   u7d?: number;
+  reset5h?: number;
+  reset7d?: number;
   model?: string;
 };
 
@@ -66,6 +68,8 @@ function buildSnapshot(lines: Raw[], windowMinutes: number) {
   const buckets = new Map<number, any>();
   let latestU5h = 0,
     latestU7d = 0,
+    latestReset5h = 0,
+    latestReset7d = 0,
     latestT = 0;
 
   for (const l of lines) {
@@ -73,6 +77,8 @@ function buildSnapshot(lines: Raw[], windowMinutes: number) {
       latestT = l.t;
       if (typeof l.u5h === "number") latestU5h = l.u5h;
       if (typeof l.u7d === "number") latestU7d = l.u7d;
+      if (typeof l.reset5h === "number") latestReset5h = l.reset5h;
+      if (typeof l.reset7d === "number") latestReset7d = l.reset7d;
     }
     if (l.t < cutoff) continue;
     const minute = Math.floor(l.t / MIN_MS) * MIN_MS;
@@ -130,6 +136,8 @@ function buildSnapshot(lines: Raw[], windowMinutes: number) {
     rate_limited_total,
     latest_u5h: latestU5h,
     latest_u7d: latestU7d,
+    reset5h: latestReset5h,
+    reset7d: latestReset7d,
     log_path: LOG_FILE,
     has_data: lines.length > 0,
   };
