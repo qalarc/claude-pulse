@@ -626,6 +626,44 @@ window.addEventListener("resize", layout);
 // initial + after first paint
 requestAnimationFrame(layout);
 
+// ── UI zoom (Ctrl + scroll, Ctrl +/-/0) ──────────────────────────────────────
+// Scales the whole interface like browser zoom. The Tauri webview doesn't wire
+// this up by default, so we do it via CSS zoom and re-fit the canvases after so
+// they re-render crisp (not janky/blurry). Persisted across launches.
+let uiZoom = parseFloat(localStorage.getItem("pulse.zoom") || "1") || 1;
+function applyZoom(z) {
+  uiZoom = Math.max(0.5, Math.min(2.5, Math.round(z * 100) / 100));
+  // `zoom` reflows layout (better than transform:scale for our flex/canvas UI)
+  document.body.style.zoom = String(uiZoom);
+  localStorage.setItem("pulse.zoom", String(uiZoom));
+  // re-fit canvases at the new effective size so they stay sharp
+  requestAnimationFrame(layout);
+}
+if (uiZoom !== 1) applyZoom(uiZoom);
+
+window.addEventListener(
+  "wheel",
+  (e) => {
+    if (!e.ctrlKey) return; // only Ctrl+wheel zooms the UI
+    e.preventDefault();
+    applyZoom(uiZoom + (e.deltaY < 0 ? 0.1 : -0.1));
+  },
+  { passive: false },
+);
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key === "=" || e.key === "+") {
+    e.preventDefault();
+    applyZoom(uiZoom + 0.1);
+  } else if (e.key === "-") {
+    e.preventDefault();
+    applyZoom(uiZoom - 0.1);
+  } else if (e.key === "0") {
+    e.preventDefault();
+    applyZoom(1);
+  }
+});
+
 // gauge animates smoothly; data refetched every 2s; days every 30s;
 // rate-limit polled every 5s on its own loop (never blocks the render)
 pollRatelimit();
